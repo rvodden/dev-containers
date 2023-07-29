@@ -55,6 +55,28 @@ RUN ../gcc/configure --host=x86_64-pc-linux-gnu --prefix=/opt/gcc/ \
 RUN make -j20 && make install
 WORKDIR /
 
+FROM ninjaimage AS llvmimage
+ARG LLVM_VERSION=16.0.6
+RUN git clone https://github.com/llvm/llvm-project.git --branch llvmorg-${LLVM_VERSION} --single-branch --depth=1
+WORKDIR /llvm-project
+RUN mkdir build
+WORKDIR /llvm-project/build
+
+FROM llvmimage AS clangimage
+RUN cmake -DLLVM_ENABLE_PROJECTS=clang -DCMAKE_INSTALL_PREFIX=/opt/clang -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind;compiler-rt" -DLLVM_HOST_TRIPLE=x86_64-pc-linux-gnu \
+    -DLLVM_TARGETS_TO_BUILD=host -G "Ninja" ../llvm
+RUN ninja 
+RUN cmake --install .
+WORKDIR /
+
+FROM llvmimage AS clangtoolsimage
+RUN cmake -DLLVM_ENABLE_PROJECTS="clang;clang-tools-extra" -DCMAKE_INSTALL_PREFIX=/opt/clang-tools -DCMAKE_BUILD_TYPE=Release \
+    -DLLVM_HOST_TRIPLE=x86_64-pc-linux-gnu -DLLVM_TARGETS_TO_BUILD=host -G "Ninja" ../llvm
+RUN cmake --build . -t clang-tidy
+RUN cmake --build . -t install-clang-tidy
+WORKDIR /
+
 FROM ubuntu:${UBUNTU_VERSION} AS gdbimage
 ARG GDB_VERSION=13.2
 ENV DEBIAN_FRONTEND=noninteractive
@@ -74,38 +96,24 @@ RUN ../gdb-${GDB_VERSION}/configure --prefix=/opt/gdb --enable-targets=x86_64-pc
 RUN make -j20 && make install
 WORKDIR /
 
-FROM ubuntu:${UBUNTU_VERSION} AS x86_64-pc-ubuntu-gcc
+FROM ubuntu:${UBUNTU_VERSION} AS x86_64-pc-ubuntu
+RUN apt update
+RUN apt install -y libc-dev libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
+    libzstd-dev binutils gzip bzip2 sudo git python3 python-is-python3 \
+    pkg-config sudo
 ARG USERNAME=hadev
 ARG USER_UID=1000
 ARG USER_GID=$USER_UID
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt update
-RUN apt install -y libc-dev libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-    libzstd-dev binutils gzip bzip2 sudo git python3 python-is-python3 \
-    pkg-config
-COPY --from=moldimage /opt/mold /opt/mold
-COPY --from=cmakeimage /opt/cmake /opt/cmake
-COPY --from=ninjaimage /opt/ninja /opt/ninja
-COPY --from=gccimage /opt/gcc /opt/gcc
-COPY --from=gdbimage /opt/gdb /opt/gdb
-ENV PATH="/opt/mold/bin:/opt/cmake/bin:/opt/gcc/bin:/opt/ninja/bin:/opt/gdb/bin:$PATH"
-COPY 00_x86_64-pc-linux.conf /etc/ld.so.conf.d/00_x86_64-pc-linux.conf
-RUN ldconfig
-COPY CMakeToolchain-base.txt /CMakeToolchain-base.txt
-COPY CMakeToolchain-gcc13.txt /CMakeToolchain.txt
-WORKDIR /
-
 RUN groupadd --gid $USER_GID $USERNAME 
 RUN useradd --uid $USER_UID --gid $USER_GID -m $USERNAME
 RUN chsh $USERNAME -s /bin/bash
 RUN echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME
 RUN chmod 0440 /etc/sudoers.d/$USERNAME
 
-COPY --from=vscodeimage --chown=${USERNAME}:${USERNAME} /root/.vscode-server /home/$USERNAME/.vscode-server
-USER ${USERNAME}
-
-FROM x86_64-pc-ubuntu-gcc AS x86_64-pc-ubuntu-gcc-x11
+FROM x86_64-pc-ubuntu AS x86_64-pc-ubuntu-x11
 USER root
+RUN apt update
 RUN apt install -y gnome-desktop-testing libasound2-dev libpulse-dev \
     libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev \
     libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
@@ -122,9 +130,37 @@ RUN apt install -y --allow-downgrades libgl1-mesa-dri=22.0.1-1ubuntu2 \
     libegl-mesa0=22.0.1-1ubuntu2 \
     libgl1-mesa-dri=22.0.1-1ubuntu2 \
     libglx-mesa0=22.0.1-1ubuntu2
-USER hadev
 
-FROM baseimage AS iccimage
+FROM x86_64-pc-ubuntu-x11 AS x86_64-pc-ubuntu-x11-gcc
+RUN apt install -y clang-format vim
+COPY --from=moldimage /opt/mold /opt/mold
+COPY --from=cmakeimage /opt/cmake /opt/cmake
+COPY --from=ninjaimage /opt/ninja /opt/ninja
+COPY --from=gccimage /opt/gcc /opt/gcc
+COPY --from=gdbimage /opt/gdb /opt/gdb
+COPY --from=clangtoolsimage /opt/clang-tools /opt/clang-tools
+ENV PATH="/opt/mold/bin:/opt/cmake/bin:/opt/gcc/bin:/opt/ninja/bin:/opt/gdb/bin:/opt/cmake-tools/bin:$PATH"
+COPY 00_x86_64-pc-linux.conf /etc/ld.so.conf.d/00_x86_64-pc-linux.conf
+RUN ldconfig
+COPY CMakeToolchain-mold.txt /CMakeToolchain-mold.txt
+COPY CMakeToolchain-gcc13.txt /CMakeToolchain.txt
+WORKDIR /
+
+FROM x86_64-pc-ubuntu-x11 AS x86_64-pc-ubuntu-x11-clang
+COPY --from=moldimage /opt/mold /opt/mold
+COPY --from=cmakeimage /opt/cmake /opt/cmake
+COPY --from=ninjaimage /opt/ninja /opt/ninja
+COPY --from=clangimage /opt/clang /opt/clang
+COPY --from=gdbimage /opt/gdb /opt/gdb
+COPY --from=clangtoolsimage /opt/clang-tools /opt/clang-tools
+ENV PATH="/opt/mold/bin:/opt/cmake/bin:/opt/clang/bin:/opt/clang-tools/bin:/opt/ninja/bin:/opt/gdb/bin:/opt/cmake-tools/bin:$PATH"
+COPY 00_x86_64-pc-linux-libc++.conf /etc/ld.so.conf.d/00_x86_64-pc-linux-libc++.conf
+RUN ldconfig
+COPY CMakeToolchain-mold-clang.txt /CMakeToolchain-mold.txt
+COPY CMakeToolchain-clang.txt /CMakeToolchain.txt
+WORKDIR /
+
+FROM x86_64-pc-ubuntu-x11 AS x86_64-pc-ubuntu-x11-icc
 RUN apt install -y software-properties-common
 RUN wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
 RUN apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
@@ -132,45 +168,9 @@ RUN rm GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
 RUN add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
 RUN apt install -y intel-basekit
 COPY CMakeToolchain-icc.txt /CMakeToolchain.txt
-
-FROM iccimage AS x86_64-pc-ubuntu-icc
-ARG USERNAME=hadev
-ARG USER_UID=1000
-ARG USER_GID=$USER_UID
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt update
-RUN apt install -y libc-dev libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-    libzstd-dev binutils gzip bzip2 sudo git python3 python-is-python3 \
-    pkg-config
 COPY --from=cmakeimage /opt/cmake /opt/cmake
 COPY --from=ninjaimage /opt/ninja /opt/ninja
 ENV PATH="/opt/cmake/bin:/opt/ninja/bin:$PATH"
 COPY --chown=root:root .bashrc /root/.bashrc
 COPY --chown=hadev:hadev .bashrc /home/hadev/.bashrc
 WORKDIR /
-
-RUN groupadd --gid $USER_GID $USERNAME 
-RUN useradd --uid $USER_UID --gid $USER_GID -m $USERNAME
-RUN chsh $USERNAME -s /bin/bash
-RUN echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME
-RUN chmod 0440 /etc/sudoers.d/$USERNAME
-
-FROM x86_64-pc-ubuntu-icc AS x86_64-pc-ubuntu-icc-x11
-USER root
-RUN apt install -y gnome-desktop-testing libasound2-dev libpulse-dev \
-    libaudio-dev libjack-dev libsndio-dev libx11-dev libxext-dev \
-    libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
-    libxkbcommon-dev libdrm-dev libgbm-dev libgl1-mesa-dev libgles2-mesa-dev \
-    libegl1-mesa-dev libdbus-1-dev libibus-1.0-dev libudev-dev fcitx-libs-dev \
-    libpipewire-0.3-dev libwayland-dev libdecor-0-dev
-# this next line is required as something is borked in mesa
-# see conversation here: https://bugs.launchpad.net/cloud-images/+bug/2007555
-RUN apt install -y --allow-downgrades libgl1-mesa-dri=22.0.1-1ubuntu2 \
-    libglx-mesa0=22.0.1-1ubuntu2 \
-    libgl1-mesa-glx=22.0.1-1ubuntu2 \
-    libglapi-mesa=22.0.1-1ubuntu2 \
-    libgbm1=22.0.1-1ubuntu2 \
-    libegl-mesa0=22.0.1-1ubuntu2 \
-    libgl1-mesa-dri=22.0.1-1ubuntu2 \
-    libglx-mesa0=22.0.1-1ubuntu2
-USER hadev
