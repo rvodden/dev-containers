@@ -1,6 +1,0 @@
-include(/CMakeToolchain-mold.txt)
-set(CMAKE_C_COMPILER /opt/gcc/bin/gcc)
-set(CMAKE_CXX_COMPILER /opt/gcc/bin/g++)
-set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES} "/opt/gcc/include/c++/13.1.1/" "/opt/gcc/lib/gcc/x86_64-pc-linux-gnu/13.1.1/include/" "/opt/gcc/include")
-set(CMAKE_CXX_FLAGS_INIT "-Wall -Wextra -pedantic")
-set(CMAKE_CXX_FLAGS_DEBUG_INIT "-Wall -Wextra -pedantic -D_GLIBCXX_DEBUG")

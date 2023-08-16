@@ -1,0 +1,6 @@
+include(/CMakeToolchain-mold.txt)
+set(CMAKE_C_COMPILER /opt/gcc/bin/gcc)
+set(CMAKE_CXX_COMPILER /opt/gcc/bin/g++)
+set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES} "/opt/gcc/include/c++/{{ GCC_VERSION }}/" "/opt/gcc/lib/gcc/x86_64-pc-linux-gnu/{{ GCC_VERSION }}/include/" "/opt/gcc/include")
+set(CMAKE_CXX_FLAGS_INIT "-Werror -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Wold-style-cas -Wcast-align -Wunused -Woverloaded-virtual -Wconversion -Wsign-conversion -Wnull-dereference -Wdouble-promotion -Wformat=2 -Wimplicit-fallthrough -Wmisleading-indentation -Wduplicated-cond -Wduplicated-branches -Wlogical-op -Wuseless-cast")
+set(CMAKE_CXX_FLAGS_DEBUG_INIT "${CMAKE_CXX_FLAGS_INIT} -D_GLIBCXX_DEBUG")
